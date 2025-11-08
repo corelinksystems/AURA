@@ -286,5 +286,5 @@ def home():
             return jsonify({"error": f"Query failed: {e}"}), 500
     return render_template("index.html")
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT",8080)) #railways give PORT automatically
+    port = int(os.environ.get("PORT",5000)) #railways give PORT automatically
     app.run(host="0.0.0.0", port=port)
