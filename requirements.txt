@@ -1,0 +1,8 @@
+﻿Flask==3.1.2
+google-generativeai==0.8.5
+gunicorn==23.0.0
+python-dotenv==1.1.1
+chromadb==1.2.1
+hf_xet==1.2.0
+pypdf2==3.0.1
+pdf2image==1.17.0

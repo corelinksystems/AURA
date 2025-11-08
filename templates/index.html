@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AURA — Research Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- MathJax configuration (must be BEFORE the MathJax script) -->
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$','$$'], ['\\[','\\]']],
+        processEscapes: true,
+        packages: {'[+]': ['noerrors']},   // render errors as text instead of red boxes
+      },
+      options: {
+        skipHtmlTags: ['script','noscript','style','textarea','pre','code'],
+        ignoreHtmlClass: 'tex2jax_ignore'
+      },
+      startup: {
+        typeset: false   // we will trigger typesetting manually
+      }
+    };
+  </script>
+  <script id="MathJax-script" async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+  <style>
+    .spinner div {
+      width: 10px; height: 10px;
+      background-color: #3b82f6;
+      border-radius: 100%;
+      display: inline-block;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .spinner .bounce1 { animation-delay: -0.32s; }
+    .spinner .bounce2 { animation-delay: -0.16s; }
+    @keyframes bounce { 0%,80%,100%{transform:scale(0);} 40%{transform:scale(1.0);} }
+
+    .input-bar { display:flex;align-items:center;background:white;border-radius:9999px;padding:8px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.2); }
+    .input-bar input[type="text"]{ flex:1;border:none;outline:none;background:transparent;font-size:1rem;color:#000; }
+    .input-bar svg{ width:22px;height:22px;color:#555;transition:.2s; }
+    .tick-icon{ color:#22c55e!important;transform:scale(1.2);transition:.2s; }
+    .progress-container{ width:100%;height:6px;background:#1e293b;border-radius:9999px;margin-top:8px; }
+    .progress-bar{ height:6px;width:0;background:#3b82f6;border-radius:9999px;transition:width .2s ease; }
+    .preview-thumb{ width:32px;height:32px;border-radius:6px;margin-right:8px;object-fit:cover;box-shadow:0 0 0 1px #334155; }
+
+    /* Math readability */
+    .mjx-chtml { font-size: 1.05em; line-height: 1.25; }
+    .math-block { overflow-x: auto; padding-bottom: 4px; }
+    #text-response p { margin: 0.35rem 0; }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-gray-100 flex flex-col items-center justify-center p-6">
+
+<div class="w-full max-w-3xl bg-slate-800/60 backdrop-blur-md border border-slate-700 shadow-2xl rounded-2xl p-6 space-y-6">
+  <div class="text-center">
+    <h1 class="text-3xl font-bold text-blue-400">AURA</h1>
+    <p class="text-sm text-gray-400">Your AI Study & Research Assistant</p>
+  </div>
+
+  <div id="response-box" class="bg-slate-900/80 border border-slate-700 rounded-xl p-4 max-h-[480px] overflow-y-auto">
+    <p class="text-gray-500 text-center">No response yet — type a question or attach a file 📄</p>
+  </div>
+
+  <form id="query-form" class="w-full space-y-2" enctype="multipart/form-data">
+    <div class="input-bar">
+      <!-- Thumbnail preview -->
+      <img id="preview-thumb" class="preview-thumb hidden">
+
+      <!-- File upload -->
+      <label for="file" id="file-label" class="mr-3 cursor-pointer">
+        <svg id="plus-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        <svg id="tick-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="hidden tick-icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      </label>
+      <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg" hidden>
+
+      <!-- Text input -->
+      <input type="text" name="user_input" id="user_input" placeholder="Ask AURA..." autocomplete="off" />
+
+      <!-- Submit -->
+      <button type="submit" id="send-btn">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+        </svg>
+      </button>
+    </div>
+
+    <div id="upload-progress" class="progress-container hidden">
+      <div id="progress-bar" class="progress-bar"></div>
+    </div>
+
+    <div id="loading-spinner" class="spinner hidden text-center mt-2">
+      <div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+let uploadedFileId = null;
+
+const fileInput = document.getElementById("file");
+const plusIcon = document.getElementById("plus-icon");
+const tickIcon = document.getElementById("tick-icon");
+const progressContainer = document.getElementById("upload-progress");
+const progressBar = document.getElementById("progress-bar");
+const responseBox = document.getElementById("response-box");
+const spinner = document.getElementById("loading-spinner");
+const previewThumb = document.getElementById("preview-thumb");
+
+/* ----------------------------------------------------------------
+   Markdown formatter that PROTECTS math and code before formatting
+   ---------------------------------------------------------------- */
+function formatMarkdown(text) {
+  if (!text) return "";
+
+  // 1) Extract fenced code blocks first (``` ... ```)
+  const codeBlocks = [];
+  text = text.replace(/```([\s\S]*?)```/g, (m, p1) => {
+    codeBlocks.push(p1);
+    return `\uE000CODE${codeBlocks.length-1}\uE000`;
+  });
+
+  // 2) Extract inline code (`...`)
+  const inlineCodes = [];
+  text = text.replace(/`([^`]+)`/g, (m, p1) => {
+    inlineCodes.push(p1);
+    return `\uE000INCODE${inlineCodes.length-1}\uE000`;
+  });
+
+  // 3) Extract MATH segments (display and inline)
+  // Order matters: grab $$...$$ and \[...\] before $...$ and \(...\)
+  const mathBlocks = [];
+  const mathPatterns = [
+    /\$\$([\s\S]*?)\$\$/g,       // $$ ... $$
+    /\\\[([\s\S]*?)\\\]/g,       // \[ ... \]
+    /\$([^$]+)\$/g,              // $ ... $
+    /\\\(([\s\S]*?)\\\)/g        // \( ... \)
+  ];
+  mathPatterns.forEach(rx => {
+    text = text.replace(rx, (m, p1) => {
+      mathBlocks.push(m); // keep original wrapper intact for MathJax
+      return `\uE000MATH${mathBlocks.length-1}\uE000`;
+    });
+  });
+
+  // 4) Escape basic HTML (safe)
+  text = text.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+  // 5) Headings
+  text = text.replace(/^###### (.*)$/gm, '<h6 class="text-gray-400 font-semibold mt-2">$1</h6>');
+  text = text.replace(/^##### (.*)$/gm, '<h5 class="text-gray-300 font-semibold mt-2">$1</h5>');
+  text = text.replace(/^#### (.*)$/gm, '<h4 class="text-blue-300 font-semibold mt-3">$1</h4>');
+  text = text.replace(/^### (.*)$/gm, '<h3 class="text-blue-400 font-semibold mt-3 text-lg">$1</h3>');
+  text = text.replace(/^## (.*)$/gm,   '<h2 class="text-blue-400 font-bold text-xl mt-4">$1</h2>');
+  text = text.replace(/^# (.*)$/gm,    '<h1 class="text-blue-400 font-bold text-2xl mt-4">$1</h1>');
+
+  // 6) Bold / italic — now safe because math is protected
+  text = text.replace(/\*\*(.*?)\*\*/g, '<b class="font-semibold text-gray-100">$1</b>');
+  text = text.replace(/(^|[^\*])\*(?!\s)(.*?)(?<!\s)\*(?!\*)/g, '$1<i class="text-gray-300">$2</i>'); // conservative italic
+
+  // 7) Lists (very simple transform)
+  text = text.replace(/^\s*[-*]\s+(.*)$/gm, '<li class="ml-5 list-disc">$1</li>');
+  // group adjacent <li> into one <ul>
+  text = text.replace(/(?:<li[\s\S]*?<\/li>\s*)+/g, m => `<ul class="list-disc pl-6 mt-1">${m}</ul>`);
+
+  // 8) Links
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-blue-400 underline">$1</a>');
+
+  // 9) Paragraphs & line breaks
+  text = text.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>');
+  text = `<p>${text}</p>`;
+
+  // 10) Restore MATH segments (wrap block math for scroll)
+  text = text.replace(/\uE000MATH(\d+)\uE000/g, (m, i) => {
+    const seg = mathBlocks[Number(i)];
+    // If it was display math ($$...$$ or \[...\]), wrap for overflow handling
+    if (/^\$\$[\s\S]*\$\$$/.test(seg) || /^\\\[/.test(seg)) {
+      return `<div class="math-block">${seg}</div>`;
+    }
+    return seg;
+  });
+
+  // 11) Restore inline code
+  text = text.replace(/\uE000INCODE(\d+)\uE000/g, (m, i) =>
+    `<code class="bg-slate-800 px-1 py-0.5 rounded text-blue-300">${inlineCodes[Number(i)]}</code>`
+  );
+
+  // 12) Restore fenced code blocks
+  text = text.replace(/\uE000CODE(\d+)\uE000/g, (m, i) =>
+    `<pre class="bg-slate-900 text-gray-100 p-3 rounded-lg overflow-x-auto my-2"><code>${codeBlocks[Number(i)]
+      .replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</code></pre>`
+  );
+
+  return text;
+}
+
+// Debounced MathJax typeset
+let mjDebounce;
+function typesetNow(targetEl) {
+  if (!window.MathJax) return;
+  if (mjDebounce) clearTimeout(mjDebounce);
+  mjDebounce = setTimeout(async () => {
+    try {
+      // clear previous MJX state from container then typeset only this box
+      MathJax.typesetClear && MathJax.typesetClear([targetEl]);
+      await MathJax.typesetPromise([targetEl]);
+    } catch (e) { console.warn("MathJax typeset error:", e); }
+  }, 20);
+}
+
+// --- Upload file when selected ---
+fileInput.addEventListener("change", () => {
+  if (!fileInput.files.length) return;
+  const file = fileInput.files[0];
+  const formData = new FormData();
+  formData.append("file", file);
+
+  // Preview thumbnail for images
+  if (file.type.startsWith("image/")) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      previewThumb.src = e.target.result;
+      previewThumb.classList.remove("hidden");
+    };
+    reader.readAsDataURL(file);
+  } else previewThumb.classList.add("hidden");
+
+  progressContainer.classList.remove("hidden");
+  progressBar.style.width = "0%";
+  responseBox.innerHTML = `<p class='text-yellow-400'>📤 Uploading <b>${file.name}</b>...</p>`;
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/upload", true);
+
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      const percent = Math.round((e.loaded / e.total) * 100);
+      progressBar.style.width = percent + "%";
+    }
+  };
+
+  xhr.onload = () => {
+    progressContainer.classList.add("hidden");
+    if (xhr.status === 200) {
+      const res = JSON.parse(xhr.responseText);
+      uploadedFileId = res.file_id;
+      plusIcon.classList.add("hidden");
+      tickIcon.classList.remove("hidden");
+      responseBox.innerHTML = `<p class='text-green-400'>✅ <b>${file.name}</b> uploaded successfully!</p>`;
+    } else {
+      responseBox.innerHTML = `<p class='text-red-400'>❌ Upload failed: ${xhr.statusText}</p>`;
+      previewThumb.classList.add("hidden");
+    }
+  };
+
+  xhr.onerror = () => {
+    progressContainer.classList.add("hidden");
+    responseBox.innerHTML = `<p class='text-red-400'>❌ Network error during upload.</p>`;
+    previewThumb.classList.add("hidden");
+  };
+
+  xhr.send(formData);
+});
+
+// --- Handle query submission ---
+document.getElementById("query-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const query = document.getElementById("user_input").value.trim();
+
+  if (!query && !uploadedFileId) {
+    responseBox.innerHTML = `<p class='text-yellow-400'>⚠️ Please type a question or upload a file.</p>`;
+    return;
+  }
+
+  spinner.classList.remove("hidden");
+  responseBox.innerHTML = `<p class='text-blue-400'>⚙️ Processing with AURA...</p>`;
+
+  const res = await fetch("/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_input: query, file_id: uploadedFileId })
+  });
+
+  spinner.classList.add("hidden");
+
+  const data = await res.json();
+  if (data.error) {
+    responseBox.innerHTML = `<p class="text-red-400">❌ ${data.error}</p>`;
+  } else {
+    const formatted = formatMarkdown(data.message || "");
+    responseBox.innerHTML = `
+      <h2 class="text-lg font-semibold text-blue-300 mb-3">Response:</h2>
+      <div id="text-response" class="text-gray-100 leading-relaxed space-y-2">${formatted}</div>`;
+
+    const target = document.getElementById("text-response");
+    typesetNow(target);
+
+    // Smooth scroll to latest answer
+    responseBox.scrollTo({ top: responseBox.scrollHeight, behavior: 'smooth' });
+  }
+
+  // Reset text input and preview (keep file id for follow-up questions)
+  document.getElementById("user_input").value = "";
+  previewThumb.classList.add("hidden");
+  tickIcon.classList.add("hidden");
+  plusIcon.classList.remove("hidden");
+});
+</script>
+
+</body>
+</html>
